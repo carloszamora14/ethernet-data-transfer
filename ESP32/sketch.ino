@@ -1,60 +1,117 @@
-#include <SPI.h>
 #include <UIPEthernet.h>
+#include <SPI.h>
+#include <ArduinoJson.h>
+#include "Rtc.h"
+#include "Mqtt.h"
 
-// Network Settings
-byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xEE};
-IPAddress esp32IP(192, 168, 0, 166);
-IPAddress arduinoIP(192, 168, 0, 177);
+#define BAUDRATE 115200
+
+const char *broker = "192.168.0.100";
+const int port = 1883;
+const char *inputTopic = "/programacion_paralela/ethernet/in";
+const char *outputTopic = "/programacion_paralela/ethernet/out";
+
+// Ethernet Configuration
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+IPAddress esp32IP(192, 168, 0, 120);
+IPAddress arduinoIP(192, 168, 0, 130);
 unsigned int udpPort = 8888;
 
+void configEthernet();
+void verifyEthernetStatus();
+void handleReceivedUdpMessage();
+void handleReceivedMessage(char *message);
+
 EthernetUDP udp;
-char receivedMessage[50];
+Rtc rtc;
+Mqtt *mqtt = Mqtt::getInstance(broker, port, 128, inputTopic, outputTopic, handleReceivedMessage);
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(BAUDRATE);
+  while (!Serial);
 
-  Ethernet.begin(mac, esp32IP);
-  Serial.print("Assigned IP Address: ");
-  Serial.println(Ethernet.localIP());
-
-  udp.begin(udpPort);
-  Serial.println("ESP32 Ethernet UDP Initialized");
+  rtc.init();
+  configEthernet();
+   mqtt->setup();
 }
 
 void loop() {
-  receiveMessageFromArduino();
-  sendMessageToArduino("Hello from ESP32");
-  delay(2000);
+  mqtt->poll();
+  verifyEthernetStatus();
+  handleReceivedUdpMessage();
+  delay(1000);
 }
 
-void receiveMessageFromArduino() {
+void configEthernet() {
+  Serial.println(F("Initializing Ethernet..."));
+
+  Ethernet.begin(mac, esp32IP);
+
+  verifyEthernetStatus();
+
+  Serial.print(F("IP Address: "));
+  Serial.println(Ethernet.localIP());
+
+  // Start UDP
+  if (udp.begin(udpPort)) {
+    Serial.println("UDP initialized successfully.");
+  } else {
+    Serial.println("Failed to initialize UDP.");
+    while (true); // Stop execution
+  }
+}
+
+void verifyEthernetStatus() {
+  while (Ethernet.hardwareStatus() == EthernetNoHardware) {
+    Serial.println(F("Ethernet module not detected. Check connections."));
+    delay(2000);
+  }
+
+  while (Ethernet.linkStatus() == LinkOFF) {
+    Serial.println(F("Ethernet cable is not connected."));
+    delay(2000);
+  }
+}
+
+void handleReceivedMessage(char *message) {
+  Serial.print(F("Message received (MQTT): "));
+  Serial.println(message);
+
+  StaticJsonDocument<128> newDoc;
+  char buffer[128];
+
+  newDoc["data"] = message;
+  size_t len = serializeJson(newDoc, buffer, 128);
+
+  udp.print(buffer);
+}
+
+void handleReceivedUdpMessage() {
   int packetSize = udp.parsePacket();
-  if (packetSize) {
-    int len = udp.read(receivedMessage, 50);
-    if (len > 0)
-      receivedMessage[len] = '\0';
-    Serial.print("Received from Arduino: ");
-    Serial.println(receivedMessage);
+  if (packetSize > 0) {
+    char buffer[128];
+    int len = udp.read(buffer, sizeof(buffer) - 1);
+    if (len > 0) {
+      buffer[len] = '\0'; // Null-terminate the message
+      Serial.print("Received message: ");
+      Serial.println(buffer);
 
-    char newMessage[100];
-    snprintf(newMessage, sizeof(newMessage), "%s time2:%d", receivedMessage, millis());
+      StaticJsonDocument<128> jsonDoc;
+      DeserializationError err = deserializeJson(jsonDoc, buffer);
+      if (!err) {
+        jsonDoc["esp32Timestamp"] = rtc.getTime();
 
-    Serial.print("New message with millis: ");
-    Serial.println(newMessage);
+        size_t len = serializeJson(jsonDoc, buffer, 128);
+        mqtt->publishMessage(buffer);
 
-    sendMessageToArduino(newMessage);
+      } else {
+        Serial.print("JSON Parsing Error: ");
+        Serial.println(err.c_str());
+      }
+    } else {
+      Serial.println("Error reading UDP packet.");
+    }
   } else {
-    Serial.println("No packet received.");
+    Serial.println("No UDP packets received.");
   }
-}
-
-void sendMessageToArduino(const char *message) {
-  udp.beginPacket(arduinoIP, udpPort);
-  if (udp.print(message) > 0) {
-    Serial.print("Message sent to Arduino: ");
-    Serial.println(message);
-  } else {
-    Serial.println("Failed to send message.");
-  }
-  udp.endPacket();
 }

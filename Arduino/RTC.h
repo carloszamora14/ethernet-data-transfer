@@ -4,9 +4,9 @@
 #include "RTClib.h"
 #include <Wire.h>
 
-class RTC {
+class Rtc {
   public:
-    RTC();
+    Rtc();
     void init();
     String getTime();
 

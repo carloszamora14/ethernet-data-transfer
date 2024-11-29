@@ -1,59 +1,99 @@
+#include "Rtc.h"
+#include <ArduinoJson.h>
 #include <SPI.h>
 #include <UIPEthernet.h>
 
-// Network Settings
-byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
-IPAddress arduinoIP(192, 168, 0, 177);
-IPAddress remoteIP(192, 168, 0, 166);
+// Network Configuration
+byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xEE};
+IPAddress arduinoIP(192, 168, 0, 130);
+IPAddress remoteIP(192, 168, 0, 120);
 unsigned int udpPort = 8888;
 
 EthernetUDP udp;
-char receivedMessage[100];
-int id = 0;
+Rtc rtc; // Real-time clock instance
 
 void setup() {
   Serial.begin(9600);
+  while (!Serial)
+    ; // Wait for serial initialization
 
+  // Initialize Ethernet and UDP
   Ethernet.begin(mac, arduinoIP);
-  Serial.print("Assigned IP Address: ");
+  udp.begin(udpPort);
+
+  // Verify Ethernet connectivity
+  verifyEthernetStatus();
+
+  Serial.print("IP Address: ");
   Serial.println(Ethernet.localIP());
 
-  udp.begin(udpPort);
-  Serial.println("Arduino Ethernet UDP Initialized");
-
-  delay(1000);
+  // Initialize RTC
+  rtc.init();
 }
 
 void loop() {
-  sendMessage();
-  receiveMessageFromESP32();
-  delay(1000);
+  verifyEthernetStatus(); // Check Ethernet connection
+
+  sendTimestampMessage(); // Send the timestamp message
+
+  delay(1000); // Delay for 1 second before next loop
 }
 
-void receiveMessageFromESP32() {
-  int packetSize = udp.parsePacket();
-  if (packetSize) {
-    int len = udp.read(receivedMessage, 100);
-    if (len > 0)
-      receivedMessage[len] = '\0';
-    Serial.print("Received from ESP32: ");
-    Serial.println(receivedMessage);
-  } else {
-    Serial.println("No packet received.");
-  }
-}
+void sendTimestampMessage() {
+  StaticJsonDocument<64> newDoc;
+  Serial.println(rtc.getTime());
+  newDoc["arduinoTimestamp"] = rtc.getTime(); // Add RTC timestamp
+  char buffer[64];
 
-void sendMessage() {
-  char message[100];
-  snprintf(message, sizeof(message), "id:%d time1:%d", id++, millis());
+  // Serialize JSON to buffer
+  size_t len = serializeJson(newDoc, buffer, 64);
 
-  // Try to send the message to the remote IP and port
+  // Send the UDP packet
   udp.beginPacket(remoteIP, udpPort);
-  if (udp.print(message) > 0) {
-    Serial.print("Message sent: ");
-    Serial.println(message);
+  if (udp.print(buffer) > 0 && udp.endPacket()) {
+    Serial.print("Sent: ");
+    Serial.println(buffer);
   } else {
     Serial.println("Failed to send message.");
   }
-  udp.endPacket();
+}
+
+void handleReceivedMessage() {
+  int packetSize = udp.parsePacket();
+  if (packetSize) {
+    StaticJsonDocument<128> newDoc;
+    char buffer[128];
+
+    int len = udp.read(buffer, sizeof(buffer) - 1);
+    if (len > 0) {
+      buffer[len] = '\0'; // Null-terminate the message
+      Serial.print("Received: ");
+      Serial.println(buffer);
+
+      // Deserialize the received JSON
+      DeserializationError err = deserializeJson(newDoc, buffer);
+      if (!err) {
+        const char *data = newDoc["data"];
+        if (data) {
+          Serial.print("Data field: ");
+          Serial.println(data);
+        }
+      } else {
+        Serial.print("JSON Parsing Error: ");
+        Serial.println(err.c_str());
+      }
+    }
+  }
+}
+
+void verifyEthernetStatus() {
+  while (Ethernet.hardwareStatus() == EthernetNoHardware) {
+    Serial.println("Ethernet module not detected. Check connections.");
+    delay(2000);
+  }
+
+  while (Ethernet.linkStatus() == LinkOFF) {
+    Serial.println("Ethernet cable is not connected.");
+    delay(2000);
+  }
 }

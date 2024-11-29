@@ -1,27 +1,22 @@
-#include "RTC.h"
+#include "Rtc.h"
 #include <Arduino.h>
 
-RTC::RTC() : rtc() {}
+Rtc::Rtc() : rtc() {}
 
-void RTC::init() {
-  if (!rtc.begin()) {
-    Serial.println("RTC initialization failed. Check wiring and power.");
-    while (true) {
-      delay(1000);
-    }
-  } else {
-    Serial.println("RTC initialized successfully.");
+void Rtc::init() {
+  while (!rtc.begin()) {
+    Serial.println(F("RTC initialization failed. Check wiring and power."));
+    delay(2000);
   }
 
-  if (!rtc.isrunning()) {
-    Serial.println("RTC is not running. Setting date and time...");
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-  } else {
-    Serial.println("RTC is running.");
-  }
+  rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  // if (!rtc.isrunning()) {
+  // }
+
+  Serial.println(F("RTC initialized successfully."));
 }
 
-String RTC::getTime() {
+String Rtc::getTime() {
   DateTime now = rtc.now();
 
   String date = String(now.year()) + "-";
@@ -29,7 +24,7 @@ String RTC::getTime() {
   date += (now.day() < 10 ? "0" : "") + String(now.day()) + "T";
   date += (now.hour() < 10 ? "0" : "") + String(now.hour()) + ":";
   date += (now.minute() < 10 ? "0" : "") + String(now.minute()) + ":";
-  date += (now.second() < 10 ? "0" : "") + String(now.second()) + "Z";
+  date += (now.second() < 10 ? "0" : "") + String(now.second()) + "-0600";
 
   return date;
 }
